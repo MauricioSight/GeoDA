@@ -8,8 +8,10 @@ Created on Thu Sep 26 01:34:01 2019
 import torch.nn as nn
 import torchvision.datasets as dsets
 
+import math
 import torchvision.transforms as transforms
 import torchvision.models as torch_models
+from torchvision.models import ResNet50_Weights
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -20,8 +22,7 @@ from PIL import Image
 from torch.autograd import Variable
 from numpy import linalg 
 import foolbox 
-import math
-import generate_2d_dct_basis
+from generate_2d_dct_basis import generate_2d_dct_basis
 import time
 
 ###############################################################
@@ -62,8 +63,8 @@ search_space = 'sub'
 image_iter = 0
 
 
-image_num = 64
-inp = "./data/ILSVRC2012_val_000000" + str(image_num) + ".JPEG"
+image_num = 4035
+inp = "./data/image_0" + str(image_num) + ".jpg"
 
 
 
@@ -184,11 +185,11 @@ def black_grad_batch(x_boundary, q_max, sigma, random_noises, batch_size, origin
     outs = []
     num_batchs = math.ceil(q_max/batch_size)
     last_batch = q_max - (num_batchs-1)*batch_size
-    EstNoise = SubNoise(batch_size, sub_basis_torch).cuda()
+    EstNoise = SubNoise(batch_size, sub_basis_torch)
     all_noises = []
     for j in range(num_batchs):
         if j == num_batchs-1:
-            EstNoise_last = SubNoise(last_batch, sub_basis_torch).cuda()
+            EstNoise_last = SubNoise(last_batch, sub_basis_torch)
             current_batch = EstNoise_last()
             current_batch_np = current_batch.cpu().numpy()
             noisy_boundary = [x_boundary[0,:,:,:].cpu().numpy()]*last_batch +sigma*current_batch.cpu().numpy()
@@ -364,7 +365,7 @@ class SubNoise(nn.Module):
         
 
         r = torch.zeros([224 ** 2, 3*self.num_noises], dtype=torch.float32)
-        noise = torch.randn([self.x.shape[1], 3*self.num_noises], dtype=torch.float32).cuda()
+        noise = torch.randn([self.x.shape[1], 3*self.num_noises], dtype=torch.float32)
         sub_noise = torch.transpose(torch.mm(self.x, noise), 0, 1)
         r = sub_noise.view([ self.num_noises, 3, 224, 224])
 
@@ -385,15 +386,18 @@ if search_space == 'sub':
 
 
     estimate_batch = grad_estimator_batch_size
-    sub_basis_torch = torch.from_numpy(sub_basis).cuda()
-    EstNoise = SubNoise(estimate_batch, sub_basis_torch).cuda()
+    sub_basis_torch = torch.from_numpy(sub_basis)
+    EstNoise = SubNoise(estimate_batch, sub_basis_torch)
     random_vectors = EstNoise()
     random_vectors_np = random_vectors.cpu().numpy()
 
 ###############################################################
 # Models
 
-resnet50 = torch_models.resnet50(pretrained=True).eval()
+resnet50 = torch_models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1).eval()
+total_feats = resnet50.fc.in_features
+resnet50.fc = nn.Linear(total_feats, 102)  # 102: total classes
+resnet50.load_state_dict(torch.load('Resnet50Flowers102/data/102flowers/model_resnet50Flower102.pt'))
 if torch.cuda.is_available():
     resnet50 = resnet50.cuda()
 meanfb = np.array([0.485, 0.456, 0.406]).reshape((3, 1, 1))
@@ -407,7 +411,10 @@ fmodel = foolbox.models.PyTorchModel(
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Load a pretrained model
-net = torch_models.resnet50(pretrained=True)
+net = torch_models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+total_feats = net.fc.in_features
+net.fc = nn.Linear(total_feats, 102)
+net.load_state_dict(torch.load('./Resnet50Flowers102/data/102flowers/model_resnet50Flower102.pt'))
 net = net.to(device)
 net.eval()
 
@@ -453,28 +460,22 @@ x_0 = im[None, :, :, :].to(device)
 x_0_np = x_0.cpu().numpy()
 
 orig_label = torch.argmax(net.forward(Variable(x_0, requires_grad=True)).data).item()
-labels = open(os.path.join('synset_words.txt'), 'r').read().split('\n')
-str_label_orig = get_label(labels[np.int(orig_label)].split(',')[0])
 
-ground_truth  = open(os.path.join('val.txt'), 'r').read().split('\n')
+ground_truth  = open(os.path.join('val_102flowers.txt'), 'r').read().split('\n')
+class_mapping_list  = open(os.path.join('class_mapping.txt'), 'r').read().split('\n')
+
+class_mapping = {}
+for item in class_mapping_list:
+    pred_c= item.split()
+    class_mapping[int(pred_c[1])] = pred_c[0]
 
 ground_name_label = ground_truth[image_num-1]
-ground_label_split_all =  ground_name_label.split
-
-ground_label_split =  ground_name_label.split()
 
 ground_label =  ground_name_label.split()[1]
-ground_label_int = int(ground_label)
-    
-
-str_label_ground = get_label(labels[np.int(ground_label)].split(',')[0])
-label_HSJA = np.argmax(fmodel.forward_one(image_fb_first))
-str_HSJA_ground = get_label(labels[np.int(label_HSJA)].split(',')[0])
-
-    
-
+ground_label_int = int(class_mapping[int(ground_label)])
    
-          
+
+
 if ground_label_int != int(orig_label):
     print('Already missclassified ... Lets try another one!')
     
@@ -568,7 +569,6 @@ else:
 
     if dist == 'l2' or dist == 'linf':
         adv_label = torch.argmax(net.forward(Variable(x_adv, requires_grad=True)).data).item()
-        str_label_adv = get_label(labels[np.int(adv_label)].split(',')[0])
     
     
     
@@ -590,10 +590,10 @@ else:
         
         
         
-        axes[0].set_title('original: ' + str_label_orig )
+        axes[0].set_title(f'original: {orig_label}')
         axes[2].set_title('magnified perturbation: $\ell_2$  subspace')
         axes[3].set_title('image + magnified perturbation' )
-        axes[1].set_title('perturbed: ' + str_label_adv)
+        axes[1].set_title(f'perturbed: {adv_label}')
         
         axes[0].axis('off')
         axes[1].axis('off')
