@@ -8,10 +8,8 @@ Created on Thu Sep 26 01:34:01 2019
 import torch.nn as nn
 import torchvision.datasets as dsets
 
-import math
 import torchvision.transforms as transforms
 import torchvision.models as torch_models
-from torchvision.models import ResNet50_Weights
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -22,6 +20,7 @@ from PIL import Image
 from torch.autograd import Variable
 from numpy import linalg 
 import foolbox 
+import math
 from generate_2d_dct_basis import generate_2d_dct_basis
 import time
 
@@ -39,7 +38,7 @@ verbose_control = 'Yes'
 
 
 
-Q_max = 4000
+Q_max = 500
 
 torch.manual_seed(992)
 torch.cuda.manual_seed(992)
@@ -52,10 +51,10 @@ sigma = 0.0002
 mu = 0.6
 
 
-#dist = 'l2'
-dist = 'linf'
-dist = 'l1'
-dist = 'linf'
+dist = 'l2'
+# dist = 'linf'
+# dist = 'l1'
+# dist = 'linf'
 search_space = 'sub'
 
 
@@ -63,8 +62,8 @@ search_space = 'sub'
 image_iter = 0
 
 
-image_num = 4035
-inp = "./data/image_0" + str(image_num) + ".jpg"
+image_num = 116
+inp = "./data/ILSVRC2012_img_val/ILSVRC2012_val_00000" + str(image_num) + ".JPEG"
 
 
 
@@ -77,16 +76,17 @@ std = [0.229, 0.224, 0.225]
     
     
 def inv_tf(x, mean, std):
+    x_clone = x.copy()
 
     for i in range(len(mean)):
 
-        x[i] = np.multiply(x[i], std[i], dtype=np.float32)
-        x[i] = np.add(x[i], mean[i], dtype=np.float32)
+        x_clone[i] = np.multiply(x_clone[i], std[i], dtype=np.float32)
+        x_clone[i] = np.add(x_clone[i], mean[i], dtype=np.float32)
 
-    x = np.swapaxes(x, 0, 2)
-    x = np.swapaxes(x, 0, 1)
+    x_clone = np.swapaxes(x_clone, 0, 2)
+    x_clone = np.swapaxes(x_clone, 0, 1)
 
-    return x
+    return x_clone
 
 ###############################################################
     
@@ -301,7 +301,14 @@ def GeoDA(x_b, iteration, q_opt):
             print('iteration -> ' + str(i) + str(message) + '     -- ' + dp + ' norm is -> ' + str(norm_p))
         
         
+        adv_pred = torch.argmax(net.forward(x_adv)).item()
+        print(adv_pred)
+        
+        
     x_adv = clip_image_values(x_adv, lb, ub)
+
+    adv_pred = torch.argmax(net.forward(x_adv)).item()
+    print(adv_pred)
         
     return x_adv, q_num, grad
 
@@ -394,27 +401,11 @@ if search_space == 'sub':
 ###############################################################
 # Models
 
-resnet50 = torch_models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1).eval()
-total_feats = resnet50.fc.in_features
-resnet50.fc = nn.Linear(total_feats, 102)  # 102: total classes
-resnet50.load_state_dict(torch.load('Resnet50Flowers102/data/102flowers/model_resnet50Flower102.pt'))
-if torch.cuda.is_available():
-    resnet50 = resnet50.cuda()
-meanfb = np.array([0.485, 0.456, 0.406]).reshape((3, 1, 1))
-stdfb = np.array([0.229, 0.224, 0.225]).reshape((3, 1, 1))
-fmodel = foolbox.models.PyTorchModel(
-    resnet50, bounds=(0, 1), num_classes=1000, preprocessing=(meanfb, stdfb))
-
-
-
 # Check for cuda devices
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Load a pretrained model
-net = torch_models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
-total_feats = net.fc.in_features
-net.fc = nn.Linear(total_feats, 102)
-net.load_state_dict(torch.load('./Resnet50Flowers102/data/102flowers/model_resnet50Flower102.pt'))
+net = torch_models.resnet50(pretrained=True)
 net = net.to(device)
 net.eval()
 
@@ -460,22 +451,23 @@ x_0 = im[None, :, :, :].to(device)
 x_0_np = x_0.cpu().numpy()
 
 orig_label = torch.argmax(net.forward(Variable(x_0, requires_grad=True)).data).item()
+labels = open(os.path.join('synset_words.txt'), 'r').read().split('\n')
+str_label_orig = get_label(labels[int(orig_label)].split(',')[0])
 
-ground_truth  = open(os.path.join('val_102flowers.txt'), 'r').read().split('\n')
-class_mapping_list  = open(os.path.join('class_mapping.txt'), 'r').read().split('\n')
-
-class_mapping = {}
-for item in class_mapping_list:
-    pred_c= item.split()
-    class_mapping[int(pred_c[1])] = pred_c[0]
+ground_truth  = open(os.path.join('val.txt'), 'r').read().split('\n')
 
 ground_name_label = ground_truth[image_num-1]
+ground_label_split_all =  ground_name_label.split
+
+ground_label_split =  ground_name_label.split()
 
 ground_label =  ground_name_label.split()[1]
-ground_label_int = int(class_mapping[int(ground_label)])
-   
+ground_label_int = int(ground_label)
+
+    
 
 
+          
 if ground_label_int != int(orig_label):
     print('Already missclassified ... Lets try another one!')
     
@@ -561,7 +553,7 @@ else:
         
                
     print('#################################################################')
-    print('End: The GeoDA algorithm' + message + qmessage )
+    print('End: The GeoDA algorithm' + message + qmessage  + '  -- ' + dist + ' norm is -> ' + str(norm_inv_opt))
     print('#################################################################')
            
 
@@ -569,14 +561,18 @@ else:
 
     if dist == 'l2' or dist == 'linf':
         adv_label = torch.argmax(net.forward(Variable(x_adv, requires_grad=True)).data).item()
+        print(adv_label)
+        str_label_adv = get_label(labels[int(adv_label)].split(',')[0])
     
     
     
         pert_norm = abs(x_opt_inverse-image_fb)/np.linalg.norm(abs(x_opt_inverse-image_fb))
+        perturbation_visualization = np.clip(100*pert_norm, 0, 1)
     
         pert_norm_abs = (x_opt_inverse-image_fb)/np.linalg.norm((x_opt_inverse-image_fb))
         
         pertimage = image_fb + 30*pert_norm_abs
+        pertimage_clipped = np.clip(pertimage, 0, 1)
     
         
         fig, axes = plt.subplots(1, 4,figsize=(16,16))
@@ -585,15 +581,15 @@ else:
         axes[0].imshow(image_fb)
         axes[1].imshow(x_opt_inverse)
     
-        axes[3].imshow(pertimage)
-        axes[2].imshow(100*pert_norm)
+        axes[3].imshow(pertimage_clipped)
+        axes[2].imshow(perturbation_visualization)
         
         
         
-        axes[0].set_title(f'original: {orig_label}')
+        axes[0].set_title('original: ' + str_label_orig )
         axes[2].set_title('magnified perturbation: $\ell_2$  subspace')
         axes[3].set_title('image + magnified perturbation' )
-        axes[1].set_title(f'perturbed: {adv_label}')
+        axes[1].set_title('perturbed: ' + str_label_adv)
         
         axes[0].axis('off')
         axes[1].axis('off')
@@ -604,8 +600,3 @@ else:
         
         
         plt.show()
-
-
-
-        
-

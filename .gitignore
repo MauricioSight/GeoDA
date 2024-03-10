@@ -1,0 +1,13 @@
+/Resnet50Flowers102/data/102flowers/test
+/Resnet50Flowers102/data/102flowers/train
+/Resnet50Flowers102/data/102flowers/valid
+/Resnet50Flowers102/data/102flowers/jpg
+
+*.npy
+
+/data/Flowers102
+/data/ILSVRC2012_img_val
+/ILSVRC2012_img_val
+/Flowers102
+102flowers.tgz
+ILSVRC2012_img_val.tar
